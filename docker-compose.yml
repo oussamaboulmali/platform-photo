@@ -1,0 +1,208 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: agency_postgres
+    environment:
+      POSTGRES_DB: agency_platform
+      POSTGRES_USER: agency_user
+      POSTGRES_PASSWORD: change_this_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - agency_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: agency_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - agency_network
+
+  auth-service:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: auth_service
+    env_file:
+      - .env
+    ports:
+      - "8001:8001"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/auth-service:/app
+    networks:
+      - agency_network
+    command: python manage.py runserver 0.0.0.0:8001
+
+  image-service:
+    build:
+      context: ./backend/image-service
+      dockerfile: Dockerfile
+    container_name: image_service
+    env_file:
+      - .env
+    ports:
+      - "8002:8002"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/image-service:/app
+      - image_storage:/var/www/agency_storage
+    networks:
+      - agency_network
+    command: python manage.py runserver 0.0.0.0:8002
+
+  order-service:
+    build:
+      context: ./backend/order-service
+      dockerfile: Dockerfile
+    container_name: order_service
+    env_file:
+      - .env
+    ports:
+      - "8003:8003"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/order-service:/app
+    networks:
+      - agency_network
+    command: python manage.py runserver 0.0.0.0:8003
+
+  admin-service:
+    build:
+      context: ./backend/admin-service
+      dockerfile: Dockerfile
+    container_name: admin_service
+    env_file:
+      - .env
+    ports:
+      - "8004:8004"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/admin-service:/app
+    networks:
+      - agency_network
+    command: python manage.py runserver 0.0.0.0:8004
+
+  celery-worker:
+    build:
+      context: ./backend/image-service
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+      - image-service
+    volumes:
+      - ./backend/image-service:/app
+      - image_storage:/var/www/agency_storage
+    networks:
+      - agency_network
+    command: celery -A image_service worker -l info
+
+  celery-beat:
+    build:
+      context: ./backend/image-service
+      dockerfile: Dockerfile
+    container_name: celery_beat
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+      - image-service
+    volumes:
+      - ./backend/image-service:/app
+    networks:
+      - agency_network
+    command: celery -A image_service beat -l info
+
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+      dockerfile: Dockerfile
+    container_name: dashboard_backend
+    env_file:
+      - .env
+    ports:
+      - "8010:8010"
+    depends_on:
+      - auth-service
+      - image-service
+      - admin-service
+    volumes:
+      - ./dashboard/backend:/app
+    networks:
+      - agency_network
+
+  dashboard-frontend:
+    build:
+      context: ./dashboard/frontend
+      dockerfile: Dockerfile
+    container_name: dashboard_frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard/frontend:/app
+      - /app/node_modules
+    networks:
+      - agency_network
+    environment:
+      - REACT_APP_API_URL=http://localhost:8010
+
+  public-backend:
+    build:
+      context: ./public/backend
+      dockerfile: Dockerfile
+    container_name: public_backend
+    env_file:
+      - .env
+    ports:
+      - "8020:8020"
+    depends_on:
+      - auth-service
+      - image-service
+      - order-service
+    volumes:
+      - ./public/backend:/app
+      - image_storage:/var/www/agency_storage
+    networks:
+      - agency_network
+
+  public-frontend:
+    build:
+      context: ./public/frontend
+      dockerfile: Dockerfile
+    container_name: public_frontend
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./public/frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - agency_network
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8020
+
+volumes:
+  postgres_data:
+  image_storage:
+
+networks:
+  agency_network:
+    driver: bridge
